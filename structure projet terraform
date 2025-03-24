@@ -1,0 +1,37 @@
+terraform/
+├── main.tf              # Configuration principale
+├── variables.tf         # Définition des variables
+├── outputs.tf           # Définition des outputs
+├── backend.tf           # Configuration du backend Azure
+├── providers.tf         # Configuration des providers
+├── modules/
+│   ├── aks/             # Module pour AKS
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── acr/             # Module pour Azure Container Registry
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── networking/      # Module pour le réseau
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── storage/         # Module pour le stockage
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── key-vault/       # Module pour Key Vault
+│       ├── main.tf
+│       ├── variables.tf
+│       └── outputs.tf
+├── environments/
+│   ├── dev/
+│   │   └── terraform.tfvars
+│   ├── staging/
+│   │   └── terraform.tfvars
+│   └── prod/
+│       └── terraform.tfvars
+└── scripts/
+    ├── terraform-init.sh
+    └── terraform-apply.sh
