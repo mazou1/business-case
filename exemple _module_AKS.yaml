@@ -1,0 +1,64 @@
+# modules/aks/main.tf
+
+resource "azurerm_kubernetes_cluster" "aks" {
+  name                = var.cluster_name
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  dns_prefix          = var.dns_prefix
+  kubernetes_version  = var.kubernetes_version
+  private_cluster_enabled = true
+  
+  default_node_pool {
+    name                = "cpupool"
+    node_count          = var.cpu_node_count
+    vm_size             = var.cpu_vm_size
+    vnet_subnet_id      = var.subnet_id
+    availability_zones  = [1, 2, 3]
+    enable_auto_scaling = true
+    min_count           = var.cpu_node_min_count
+    max_count           = var.cpu_node_max_count
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+  
+  network_profile {
+    network_plugin     = "azure"
+    network_policy     = "calico"
+    service_cidr       = var.service_cidr
+    dns_service_ip     = var.dns_service_ip
+    docker_bridge_cidr = var.docker_bridge_cidr
+    outbound_type      = "userDefinedRouting"
+  }
+  
+  oms_agent {
+    log_analytics_workspace_id = var.log_analytics_workspace_id
+  }
+  
+  tags = var.tags
+}
+
+resource "azurerm_kubernetes_cluster_node_pool" "gpu_pool" {
+  name                  = "gpupool"
+  kubernetes_cluster_id = azurerm_kubernetes_cluster.aks.id
+  vm_size               = var.gpu_vm_size
+  node_count            = var.gpu_node_count
+  vnet_subnet_id        = var.subnet_id
+  availability_zones    = [1, 2, 3]
+  
+  enable_auto_scaling   = true
+  min_count             = var.gpu_node_min_count
+  max_count             = var.gpu_node_max_count
+  
+  node_taints = [
+    "nvidia.com/gpu=present:NoSchedule"
+  ]
+  
+  node_labels = {
+    "accelerator" = "nvidia"
+    "workload"    = "ai-models"
+  }
+  
+  tags = var.tags
+}
