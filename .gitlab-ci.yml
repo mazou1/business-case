@@ -1,0 +1,150 @@
+stages:
+  - validate
+  - build
+  - test
+  - security
+  - deploy-infra
+  - deploy-staging
+  - test-staging
+  - deploy-prod
+
+variables:
+  DOCKER_REGISTRY: "${CI_REGISTRY}"
+  APP_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/hello-world:${CI_COMMIT_SHORT_SHA}"
+  MODEL_IMAGE_NAME: "${CI_REGISTRY_IMAGE}/ai-model:${CI_COMMIT_SHORT_SHA}"
+  TERRAFORM_VERSION: "1.5.5"
+  KUBECTL_VERSION: "1.26.0"
+  HELM_VERSION: "3.12.0"
+
+# Validation du code Terraform et des configurations Kubernetes
+validate:
+  stage: validate
+  image:
+    name: hashicorp/terraform:${TERRAFORM_VERSION}
+    entrypoint: [""]
+  script:
+    - cd ./terraform
+    - terraform init -backend-config="storage_account_name=${TF_STORAGE_ACCOUNT}" -backend-config="container_name=${TF_CONTAINER}" -backend-config="key=terraform.tfstate" -backend-config="sas_token=${TF_SAS_TOKEN}"
+    - terraform validate
+    - terraform plan -out=tfplan
+  artifacts:
+    paths:
+      - ./terraform/tfplan
+    expire_in: 1 day
+
+# Build des images Docker pour l'application et les modèles IA
+build:
+  stage: build
+  image: docker:20.10.16
+  services:
+    - docker:20.10.16-dind
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+    # Build de l'application Hello World
+    - docker build -t $APP_IMAGE_NAME -f ./app/Dockerfile ./app
+    - docker push $APP_IMAGE_NAME
+    # Build de l'image pour les modèles IA
+    - docker build -t $MODEL_IMAGE_NAME -f ./models/Dockerfile ./models
+    - docker push $MODEL_IMAGE_NAME
+  only:
+    - main
+    - tags
+
+# Tests unitaires et d'intégration
+test:
+  stage: test
+  image: python:3.10
+  script:
+    - cd ./app
+    - pip install -r requirements-dev.txt
+    - pytest --cov=. --cov-report=xml
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: ./app/coverage.xml
+
+# Scan de sécurité des images Docker
+security:
+  stage: security
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  script:
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL $APP_IMAGE_NAME
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL $MODEL_IMAGE_NAME
+  allow_failure: true
+
+# Déploiement de l'infrastructure avec Terraform
+deploy-infra:
+  stage: deploy-infra
+  image:
+    name: hashicorp/terraform:${TERRAFORM_VERSION}
+    entrypoint: [""]
+  script:
+    - cd ./terraform
+    - terraform init -backend-config="storage_account_name=${TF_STORAGE_ACCOUNT}" -backend-config="container_name=${TF_CONTAINER}" -backend-config="key=terraform.tfstate" -backend-config="sas_token=${TF_SAS_TOKEN}"
+    - terraform apply -auto-approve tfplan
+    - terraform output -json > terraform_output.json
+  artifacts:
+    paths:
+      - ./terraform/terraform_output.json
+    expire_in: 1 week
+  dependencies:
+    - validate
+
+# Déploiement en environnement de staging
+deploy-staging:
+  stage: deploy-staging
+  image:
+    name: bitnami/kubectl:${KUBECTL_VERSION}
+    entrypoint: [""]
+  script:
+    - mkdir -p $HOME/.kube
+    - echo ${KUBE_CONFIG} | base64 -d > $HOME/.kube/config
+    - chmod 400 $HOME/.kube/config
+    - kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -
+    - helm upgrade --install hello-world ./helm/hello-world --namespace staging --set image.repository=${CI_REGISTRY_IMAGE}/hello-world --set image.tag=${CI_COMMIT_SHORT_SHA}
+    - helm upgrade --install ai-models ./helm/ai-models --namespace staging --set image.repository=${CI_REGISTRY_IMAGE}/ai-model --set image.tag=${CI_COMMIT_SHORT_SHA}
+  environment:
+    name: staging
+    url: https://staging.app.internal.chanel.com
+  dependencies:
+    - deploy-infra
+
+# Tests en environnement de staging
+test-staging:
+  stage: test-staging
+  image:
+    name: curlimages/curl:latest
+    entrypoint: [""]
+  script:
+    - curl -f -k https://staging.app.internal.chanel.com/health
+    - curl -f -k https://staging.app.internal.chanel.com/api/hello
+  environment:
+    name: staging
+  dependencies:
+    - deploy-staging
+
+# Déploiement en production avec approbation manuelle
+deploy-prod:
+  stage: deploy-prod
+  image:
+    name: bitnami/kubectl:${KUBECTL_VERSION}
+    entrypoint: [""]
+  script:
+    - mkdir -p $HOME/.kube
+    - echo ${KUBE_CONFIG} | base64 -d > $HOME/.kube/config
+    - chmod 400 $HOME/.kube/config
+    - kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
+    - helm upgrade --install hello-world ./helm/hello-world --namespace production --set image.repository=${CI_REGISTRY_IMAGE}/hello-world --set image.tag=${CI_COMMIT_SHORT_SHA}
+    - helm upgrade --install ai-models ./helm/ai-models --namespace production --set image.repository=${CI_REGISTRY_IMAGE}/ai-model --set image.tag=${CI_COMMIT_SHORT_SHA}
+  environment:
+    name: production
+    url: https://app.internal.chanel.com
+  dependencies:
+    - test-staging
+  when: manual
+  only:
+    - main
+    - tags
